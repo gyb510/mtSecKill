@@ -1,6 +1,7 @@
 package secKill
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -48,7 +49,9 @@ type jdSecKill struct {
 	IsOk        bool
 	StartTime   time.Time
 	DiffTime    int64
-	PayPwd string
+	PayPwd 		string
+	ddToken		string
+	serialNo	int
 }
 
 func NewJdSecKill(execPath string, skuId string, num, works int) *jdSecKill {
@@ -66,8 +69,17 @@ func NewJdSecKill(execPath string, skuId string, num, works int) *jdSecKill {
 		IsOk:       false,
 		IsOkChan:   make(chan struct{}, 1),
 	}
+//	jsk.ctx, jsk.cancel = chromedpEngine.NewExecCtx(chromedp.DisableGPU, chromedp.Headless, chromedp.ExecPath(execPath), chromedp.UserAgent(jsk.userAgent))
 	jsk.ctx, jsk.cancel = chromedpEngine.NewExecCtx(chromedp.ExecPath(execPath), chromedp.UserAgent(jsk.userAgent))
 	return jsk
+}
+
+func (jsk *jdSecKill) SetSerialNo(serialNo int) {
+	jsk.serialNo = serialNo
+}
+
+func (jsk *jdSecKill) SetDdToken(token string) {
+	jsk.ddToken = token
 }
 
 func (jsk *jdSecKill) SetEid(eid string) {
@@ -88,6 +100,22 @@ func (jsk *jdSecKill) Stop() {
 	c := jsk.cancel
 	c()
 	return
+}
+
+func (jsk *jdSecKill) NotifyForDing(title string, content string, img string)  {
+	content = fmt.Sprintf("[%s][%d]", time.Now().Format("2006-01-02 15:04:05"), jsk.serialNo) + content
+	if img != "" {
+		content = fmt.Sprintf("#### %s\n![screenshot](%s)", content, img)
+	}
+	title = fmt.Sprintf("[JDSC] [%d] %s", jsk.serialNo, title)
+
+	var reqUrl = "https://oapi.dingtalk.com/robot/send?access_token=" + jsk.ddToken
+
+	var jsonStr = []byte(fmt.Sprintf(`{"msgtype":"markdown","markdown":{"title": "%s","text":"%s"},"at":{"isAtAll":false}}`, title, content))
+	req, _ := http.NewRequest("POST", reqUrl, bytes.NewBuffer(jsonStr))
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{}
+	client.Do(req)
 }
 
 func (jsk *jdSecKill) GetReq(reqUrl string, params map[string]string, referer string, ctx context.Context, isDisableRedirects bool) (gjson.Result, error) {
@@ -117,8 +145,8 @@ func (jsk *jdSecKill) GetReq(reqUrl string, params map[string]string, referer st
 	}
 	//设置cookie到浏览器
 	for _, respCookie := range resp.Cookies() {
-		ok, err := network.SetCookie(respCookie.Name, respCookie.Value).WithURL(resp.Request.URL.String()).Do(ctx)
-		if !ok {
+		ok := network.SetCookie(respCookie.Name, respCookie.Value).WithURL(resp.Request.URL.String()).Do(ctx)
+		if ok == nil {
 			logs.PrintErr(respCookie.Name, respCookie.Value, " cookie设置失败", err)
 		}
 	}
@@ -170,7 +198,7 @@ func (jsk *jdSecKill) PostReq(reqUrl string, params url.Values, referer string, 
 	}
 	//设置cookie到浏览器
 	for _, respCookie := range resp.Cookies() {
-		_, _ = network.SetCookie(respCookie.Name, respCookie.Value).WithURL(resp.Request.URL.String()).Do(ctx)
+		network.SetCookie(respCookie.Name, respCookie.Value).WithURL(resp.Request.URL.String()).Do(ctx)
 	}
 	defer resp.Body.Close()
 	b, _ := ioutil.ReadAll(resp.Body)
@@ -215,6 +243,7 @@ func (jsk *jdSecKill) InitActionFunc() chromedp.ActionFunc {
 		chromedp.ListenTarget(ctx, func(ev interface{}) {
 			switch e := ev.(type) {
 			case *network.EventResponseReceived:
+				logs.PrintlnInfo("响应:" + e.Response.URL)
 				go func() {
 					if strings.Contains(e.Response.URL, "passport.jd.com/user/petName/getUserInfoForMiniJd.action") {
 						b, err := network.GetResponseBody(e.RequestID).Do(ctx)
@@ -235,6 +264,7 @@ func (jsk *jdSecKill) Run() error {
 	return chromedp.Run(jsk.ctx, chromedp.Tasks{
 		jsk.InitActionFunc(),
 		chromedp.Navigate("https://passport.jd.com/uc/login"),
+		jsk.SendQrcodeToDingDing(),
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			logs.PrintlnInfo("等待登陆......")
 			for {
@@ -316,6 +346,24 @@ func (jsk *jdSecKill) WaitStart() {
 		if st - d - 4 > 0 {
 			time.Sleep(time.Duration(st - d - 4) * time.Millisecond)
 		}
+	}
+}
+
+func (jsk *jdSecKill) SendQrcodeToDingDing() chromedp.ActionFunc  {
+	return func(ctx context.Context) error {
+		logs.PrintlnInfo("开始发送二维码到钉钉机器人")
+		chromedp.WaitVisible(".qrcode-img").Do(ctx)
+		var itemNodes []*cdp.Node
+		err := chromedp.Nodes(".qrcode-img img", &itemNodes, chromedp.ByQueryAll).Do(ctx)
+		if err != nil {
+			return err
+		}
+		n := itemNodes[rand.Intn(len(itemNodes))]
+		_ = dom.ScrollIntoViewIfNeeded().WithNodeID(n.NodeID).Do(ctx)
+		src := "https:" + n.AttributeValue("src")
+		logs.PrintlnInfo("二维码地址:" + src)
+		jsk.NotifyForDing("二维码", "二维码", src)
+		return nil
 	}
 }
 

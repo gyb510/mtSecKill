@@ -6,6 +6,7 @@ import (
 	"github.com/zqijzqj/mtSecKill/global"
 	"github.com/zqijzqj/mtSecKill/logs"
 	"github.com/zqijzqj/mtSecKill/secKill"
+	"math/rand"
 	"os"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ var eid = flag.String("eid", "", "如果不传入，可自动获取，对于无�
 var fp = flag.String("fp", "", "如果不传入，可自动获取，对于无法获取的用户可手动传入参数")
 var payPwd = flag.String("payPwd", "", "支付密码 可不填")
 var isFileLog = flag.Bool("isFileLog", false, "是否使用文件记录日志")
+var ddToken = flag.String("ddToken", "", "钉钉通知token")
+var serialNo = flag.Int("serialNo", rand.Intn(999999), "随机编号")
 
 func init() {
 	flag.Parse()
@@ -50,6 +53,12 @@ func main() {
 		}
 		jdSecKill.SetEid(*eid)
 	}
+
+	if *ddToken != "" {
+		jdSecKill.SetDdToken(*ddToken)
+	}
+
+	jdSecKill.SetSerialNo(*serialNo)
 
 	if *fp != "" {
 		if *eid == "" {
